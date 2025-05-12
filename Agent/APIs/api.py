@@ -10,6 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from Agent.Agent import agent_executor
 from Agent.StreamingHandler import QueueCallbackHandler
+from pydantic import BaseModel
+
+class InvokeRequest(BaseModel):
+    content: str
 
 app = FastAPI()
 
@@ -20,9 +24,10 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-async def token_generate(content: str, streamer: QueueCallbackHandler):
+import json
+async def token_generate(content: InvokeRequest, streamer: QueueCallbackHandler):
     task = asyncio.create_task(agent_executor.invoke(
-        input=content,
+        input=content.content,
         streamer=streamer,
         verbose=True
     ))
@@ -30,22 +35,43 @@ async def token_generate(content: str, streamer: QueueCallbackHandler):
     async for token in streamer:
         try:
             if token == "<<STEP_END>>":
-                yield '</step>'
-            elif tool_calls := token.message.additional_kwargs.get('tool_calls'):
-                if tool_name := tool_calls[0]['function']['name']:
-                    yield f"<step><step_name>{tool_name}</step_name>"
-            if tool_args := tool_calls[0]["function"]["arguments"]:
-                yield tool_args
+                yield "</step>"
+
+            elif tool_calls := getattr(token.message, "tool_calls", None):
+                if isinstance(tool_calls, list) and tool_calls:
+                    tool_name = tool_calls[0].get("name")
+                    if tool_name:
+                        yield f"<step><step_name>{tool_name}</step_name>"
+
+                    tool_args = tool_calls[0].get("args", {})
+
+                    # final_answer için JSON stringi değil, XML etiketleri ile detayları verelim
+                    if tool_name == "final_answer":
+                        answer = tool_args.get("answer", "")
+                        tools_used = tool_args.get("tools_used", [])
+                        yield f"<answer>{answer}</answer>"
+                        yield f"<tools_used>{json.dumps(tools_used)}</tools_used>"
+                    else:
+                        # Diğer tool argümanları JSON string olarak gönderilebilir
+                        if tool_args:
+                            yield json.dumps(tool_args)
+
+            elif hasattr(token, "message") and token.message.content:
+                yield token.message.content
+
         except Exception as e:
             print(f"Error streaming token: {e}")
             continue
+
+    # Streaming tamamlandığında task sonucu alınıyor ama tekrar yield etmiyoruz
     await task
 
-@app.post('/invoke')
-async def invoke(content: str):
-    queue : asyncio.Queue = asyncio.Queue()
+@app.post("/invoke")
+async def invoke(content: InvokeRequest):
+    queue: asyncio.Queue = asyncio.Queue()
     streamer = QueueCallbackHandler(queue)
 
+    # Ensure that we keep the connection open and yield data properly
     return StreamingResponse(
         token_generate(content, streamer),
         media_type="text/event-stream",
