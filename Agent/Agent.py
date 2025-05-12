@@ -1,11 +1,14 @@
 import os
+from gc import callbacks
 
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables import ConfigurableField
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
 from Agent.Memory.memory import ConversationSummaryBufferMemory
 import Tools.Tools as tools
+from Agent.StreamingHandler import QueueCallbackHandler
 from Agent.Tools.Tools import read_pdf_and_save, serp_api_search
 
 model = 'models/gemini-2.5-flash-preview-04-17'
@@ -13,7 +16,7 @@ GOOGLE_API_KEY = SecretStr(os.environ['GOOGLE_API_KEY'])
 
 llm = ChatGoogleGenerativeAI(
     google_api_key=GOOGLE_API_KEY,
-    model = model,
+    model=model,
     tempreture=0.0
 ).configurable_fields(
     callbacks=ConfigurableField(
@@ -50,3 +53,13 @@ class Agent:
             | prompt
             | llm.bind_tools(self.tools, tool_choice='any')
         )
+
+    async def stream(self, query: str, stramer: QueueCallbackHandler) -> AIMessage:
+        response = self.agent.with_config(
+            callbacks=[stramer]
+        )
+
+    async def invoke(self, input: str, streamer: QueueCallbackHandler, verbose: bool = False):
+        count = 0
+        final_answer: str | None = None
+        agent_scratchpad: list[AIMessage | ToolMessage] = []
