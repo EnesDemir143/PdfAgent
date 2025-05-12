@@ -1,17 +1,15 @@
 import asyncio
 import os
-from gc import callbacks
 
-from langchain_core.messages import AIMessage, ToolMessage
-from langchain_core.messages.tool import tool_call
+from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables import ConfigurableField
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
 from Agent.Memory.memory import ConversationSummaryBufferMemory
-import Tools.Tools as tools
 from Agent.StreamingHandler import QueueCallbackHandler
 from Agent.Tools.Tools import read_pdf_and_save, serp_api_search
+from Agent.Tools.tool_helpers import execute_tools
 
 #Model tanımlaması
 model = 'models/geini-2.5-flash-preview-04-17'
@@ -49,8 +47,8 @@ class Agent:
     def __init__(self, max_iter=3):
         tools = [read_pdf_and_save, serp_api_search]
         self.tools = {tool.name:tool.coroutine for tool in tools}
-        self.chat_history = ConversationSummaryBufferMemory()
         self.max_iter = max_iter
+        self.chat_history = ConversationSummaryBufferMemory(llm=llm, k=self.max_iter)
         self.agent = (
             {
                 'input': lambda x: x['input'],
@@ -60,6 +58,7 @@ class Agent:
             | prompt
             | llm.bind_tools(self.tools, tool_choice='any')
         )
+
     #Bu fonksiyon aslında streaming ile gelen tokenları işliyor ve birleştiriyor.Yani tool ve parametrekleri kısaca
     async def stream(self, query: str, stramer: QueueCallbackHandler, agent_scratchpad: list[AIMessage | ToolMessage]) -> list[AIMessage]:
         #Burda straming yapmak için gereken confiiği alıyorum llmden
@@ -101,8 +100,40 @@ class Agent:
         final_answer: str | None = None
         agent_scratchpad: list[AIMessage | ToolMessage] = []
 
-        tool_calls = await self.stream(query=input, stramer=streamer, agent_scratchpad=agent_scratchpad)
+        while count< self.max_iter:
+            tool_calls = await self.stream(query=input, stramer=streamer, agent_scratchpad=agent_scratchpad)
 
-        tool_execute = await asyncio.gather(
-            *[ece]
-        )
+            #Tool sonuçları burda toplanıyor bir liste olarak.
+            #Burda * olma sebebi ise gather aynı anda birden fazla await func olması için onları args olarak almalı.
+            tool_executes = await asyncio.gather(
+                *[execute_tools(tool_call, self.tools) for tool_call in tool_calls]
+            )
+
+            #Bu aslında bir dict oluşturuyor her toolid ye karşılık toolmessage
+            id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in zip(tool_calls, tool_executes)}
+            for tool_call in tool_calls:
+                agent_scratchpad.extend([tool_call, id2tool_executed[tool_call.tool_call_id]])
+
+            count+=1
+            found_final_answer = False
+
+            #Burda tooların hepsindne final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
+            for tool_call in tool_calls:
+                if tool_call.tool_calls[0]['name'] == 'final_answer':
+                    final_answer_call = tool_call.tool_calls[0]
+                    final_answer = final_answer_call['args']['answer']
+                    found_final_answer=True
+                    break
+
+            if found_final_answer:
+                break
+
+        #Custom olan kendi historyme eklemeler yapıyorum burda.
+        self.chat_history.add_messages([
+            HumanMessage(content=input),
+            AIMessage(content=final_answer if final_answer else 'No answer found')
+        ])
+
+        return final_answer_call if final_answer else {"answer": "No answer found", "tools_used": []}
+
+
