@@ -10,7 +10,7 @@ from pydantic import SecretStr
 from Agent.Memory.MemoryRunnable import get_chat_history
 from Agent.Memory.memory import ConversationSummaryBufferMemory
 from Agent.StreamingHandler import QueueCallbackHandler
-from Agent.Tools.Tools import read_pdf_and_save, final_answer, serp_api_search
+from Agent.Tools.Tools import read_pdf_and_save, final_answer
 from Agent.Tools.tool_helpers import execute_tools
 
 #Model tanımlaması
@@ -46,7 +46,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 class Agent:
     def __init__(self, max_iter=3):
-        tools = [read_pdf_and_save, final_answer, serp_api_search]
+        tools = [read_pdf_and_save, final_answer]
         self.tools = {tool.name: tool.coroutine for tool in tools}
         self.max_iter = max_iter
         self.chat_history = ConversationSummaryBufferMemory(llm=llm, k=self.max_iter)
@@ -70,7 +70,7 @@ class Agent:
         outputs = []
         async for token in response.astream({
             "input": query,
-            "chat_history": self.chat_history.aget_messages(),
+            "chat_history":  self.chat_history.aget_messages(),
             "agent_scratchpad": agent_scratchpad
         }):
             #Burda token sonucu olan argumanları alıyoruz.Bunlar fonksiyonun id'side olabilir.Parametreleride.
@@ -99,34 +99,42 @@ class Agent:
     async def invoke(self, input: str, streamer: QueueCallbackHandler, verbose: bool = False):
         count = 0
         final_answer: str | None = None
-        agent_scratchpad: list[AIMessage | ToolMessage] = []
+        agent_scratchpad: list[AIMessage | ToolMessage] = getattr(self, 'agent_scratchpad', [])
 
         while count< self.max_iter:
             tool_calls = await self.stream(query=input, stramer=streamer, agent_scratchpad=agent_scratchpad)
 
-            valid_tool_calls = [tc for tc in tool_calls if tc.tool_calls]
-            #Tool sonuçları burda toplanıyor bir liste olarak.
-            #Burda * olma sebebi ise gather aynı anda birden fazla await func olması için onları args olarak almalı.
+            valid_tool_calls = [
+                tc for tc in tool_calls
+                if isinstance(tc, AIMessage) and hasattr(tc, 'tool_calls') and tc.tool_calls and len(tc.tool_calls) > 0
+            ]
+
             tool_executes = await asyncio.gather(
                 *[execute_tools(tool_call, self.tools) for tool_call in valid_tool_calls]
             )
 
-            #Bu aslında bir dict oluşturuyor her toolid ye karşılık toolmessage
-            id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in zip(valid_tool_calls, tool_executes)}
+            id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in
+                                zip(valid_tool_calls, tool_executes)}
+
             for tool_call in tool_calls:
-                agent_scratchpad.extend([tool_call, id2tool_executed[tool_call.tool_call_id]])
+                tool_call_id = tool_call.tool_call_id
+                if tool_call_id in id2tool_executed:
+                    agent_scratchpad.extend([tool_call, id2tool_executed[tool_call_id]])
+                else:
+                    print(f"Warning: tool_call_id {tool_call_id} not found or execution failed")
 
             count+=1
-            found_final_answer = False
             #Burda tooların hepsindn final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
 
-            print(tool_call.tool_calls[0]["name"], 'Arabaaaaaa')
+            found_final_answer = False
+
             for tool_call in tool_calls:
-                if tool_call.tool_calls[0]['name'] == 'final_answer':
-                    final_answer_call = tool_call.tool_calls[0]
-                    final_answer = final_answer_call['args']['answer']
-                    found_final_answer=True
-                    break
+                if getattr(tool_call, 'tool_call', None) and len(tool_call.tool_call) > 0:
+                    if tool_call.tool_call[0]['name'] == 'final_answer':
+                        final_answer_call = tool_call.tool_call[0]
+                        final_answer = final_answer_call['args']['answer']
+                        found_final_answer = True
+                        break
 
             if found_final_answer:
                 break
