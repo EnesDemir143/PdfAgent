@@ -40,11 +40,13 @@ def read_pdf_and_save(path: Path) -> None:
 
 @tool
 async def serp_api_search(query: str) -> list[Article]:
+    #Burda serpapi için gerekli parametreleri ayarlıyoruz
     params = {
         'api_key': SERPAPI_API_KEY.get_secret_value(),
         'engine': 'google',
         'q': query
     }
+    #Async ile beraber streaming yapmayı saglıyoruz.Bu yöntemle apiden veri alıyoruz.
     async with aiohttp.ClientSession() as session:
         async with session.get(
             "https://serpapi.com/search",
@@ -52,3 +54,8 @@ async def serp_api_search(query: str) -> list[Article]:
         ) as response:
             results = await response.json()
     return [Article.from_serpapi_result(result) for result in results['organic_results']]
+
+@tool
+async def final_answer(answer: str, tools_used: list[str]) -> dict[str, str | list[str]]:
+    """Use this tool to provide a final answer to the user."""
+    return {"answer": answer, "tools_used": tools_used}
