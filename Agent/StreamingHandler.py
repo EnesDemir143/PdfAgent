@@ -23,14 +23,14 @@ class QueueCallbackHandler(AsyncCallbackHandler):
 
     #LLM tarafından otomatık olarak bu fonksiyon çalıştırılır.Her tokenı queue ye koyar
     async def on_llm_new_token(self, *args, **kwargs) -> None:
-        chunk = kwargs.get('chunk')
+        chunk = kwargs.get("chunk")
         if chunk and chunk.message.additional_kwargs.get("tool_calls"):
-            if chunk.message.additional_kwargs['tool_calls'][0]['function']['name'] == 'final_answer':
+            if chunk.message.additional_kwargs["tool_calls"][0]["function"]["name"] == "final_answer":
                 self.final_answer_seen = True
-        self.queue.put_nowait(kwargs.get('chunk'))
+        self.queue.put_nowait(kwargs.get("chunk"))
 
     #LLM işlemlerin sonuna geldini diye kontrol eder.Ona göre done veya step end ile ayort etmemizi sağlar.
-    async def on_llm_end(self, *args, **kwargs)-> None:
+    async def on_llm_end(self, *args, **kwargs) -> None:
         if self.final_answer_seen:
             self.queue.put_nowait("<<DONE>>")
         else:

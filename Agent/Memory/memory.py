@@ -8,14 +8,11 @@ from pydantic import BaseModel, Field
 from langchain_core.messages import SystemMessage, HumanMessage
 
 
-class ConversationSummaryBufferMemory(BaseChatMessageHistory, BaseModel):
-
-    messages: list[BaseMessage] =  Field(default_factory=list)
-    llm: ChatGoogleGenerativeAI = Field(default_factory=ChatGoogleGenerativeAI)
-    k: int = Field(default_factory=int)
-
+class ConversationSummaryBufferMemory(BaseChatMessageHistory):
     def __init__(self, llm: ChatGoogleGenerativeAI, k: int):
-        super().__init__(llm=llm, k=k)
+        self.llm = llm
+        self.k = k
+        self.messages: list[BaseMessage] = []
 
     def add_messages(self, messages: list[BaseMessage]) -> None:
 
@@ -65,6 +62,5 @@ class ConversationSummaryBufferMemory(BaseChatMessageHistory, BaseModel):
         #Mesajları siliyoruz burda.
         self.messages = []
 
-
-
-
+    def aget_messages(self) -> list[BaseMessage]:
+        return self.messages

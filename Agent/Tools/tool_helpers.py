@@ -1,10 +1,10 @@
 from langchain_core.messages import AIMessage, ToolMessage
 
 
-async def execute_tools(tool_call: AIMessage, tools: dict) -> ToolMessage:
-    tool_id = tool_call[0]['name']
-    tool_args = tool_call[0]['args']
-    tool_out = await tools[tool_id](**tool_args)
+async def execute_tools(tool_call: AIMessage, tools) -> ToolMessage:
+    tool_name = tool_call.tool_calls[0]["name"]
+    tool_args = tool_call.tool_calls[0]["args"]
+    tool_out = await tools[tool_name](**tool_args)
     #Yukarıda sırası ile önce tool ismi ve atgumanı alınıyor sonrasında toolsdan dict üzerinden erişim ile çagırılıyor.
     return ToolMessage(
         content=f"{tool_out}",

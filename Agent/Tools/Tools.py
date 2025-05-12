@@ -1,52 +1,43 @@
-import os
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import Chroma
+from langchain.tools import tool
 from pathlib import Path
-
 import aiohttp
-from langchain.tools import  tool
-from langchain.document_loaders import PyPDFLoader
-from langchain_text_splitters import CharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import Chroma
-from Agent.Tools.Article import Article
+import os
 from pydantic import SecretStr
+from Agent.Tools.Article import Article
 
-
-# Constants and Configuration
 GOOGLE_API_KEY = SecretStr(os.environ["GOOGLE_API_KEY"])
 SERPAPI_API_KEY = SecretStr(os.environ["SERPAPI_API_KEY"])
 
 @tool
 def read_pdf_and_save(path: Path) -> None:
-    #pdf yükleme işlemi
+    """
+    PDF dosyasını okur, parçalara böler, vektörleştirir ve Chroma'ya kaydeder.
+    """
     loader = PyPDFLoader(path)
     document = loader.load()
-
-    #pdfi chunklara bölüyoruz verim için.
     text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     docs = text_splitter.split_documents(document)
-
-    #Embedding modeli tanımlıyoruz
     embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-    #Chroma ile pdfi kalıcı hale getiriyoruz
     vectorstore = Chroma.from_documents(
         documents=docs,
         embedding=embedding,
         persist_directory="vectorstore/pdf_store"
     )
-    #Kalıcı olarak saklıyoruz
     vectorstore.persist()
-
 
 @tool
 async def serp_api_search(query: str) -> list[Article]:
-    #Burda serpapi için gerekli parametreleri ayarlıyoruz
+    """
+    Google'da verilen sorgu ile arama yapar ve sonuçları Article listesi olarak döndürür.
+    """
     params = {
         'api_key': SERPAPI_API_KEY.get_secret_value(),
         'engine': 'google',
         'q': query
     }
-    #Async ile beraber streaming yapmayı saglıyoruz.Bu yöntemle apiden veri alıyoruz.
     async with aiohttp.ClientSession() as session:
         async with session.get(
             "https://serpapi.com/search",

@@ -6,13 +6,15 @@ from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables import ConfigurableField
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
+
+from Agent.Memory.MemoryRunnable import get_chat_history
 from Agent.Memory.memory import ConversationSummaryBufferMemory
 from Agent.StreamingHandler import QueueCallbackHandler
-from Agent.Tools.Tools import read_pdf_and_save, serp_api_search
+from Agent.Tools.Tools import read_pdf_and_save, final_answer, serp_api_search
 from Agent.Tools.tool_helpers import execute_tools
 
 #Model tanımlaması
-model = 'models/geini-2.5-flash-preview-04-17'
+model = 'gemini-2.0-flash'
 #API yı alıyoruz .env den.
 GOOGLE_API_KEY = SecretStr(os.environ['GOOGLE_API_KEY'])
 
@@ -20,7 +22,7 @@ GOOGLE_API_KEY = SecretStr(os.environ['GOOGLE_API_KEY'])
 llm = ChatGoogleGenerativeAI(
     google_api_key=GOOGLE_API_KEY,
     model=model,
-    tempreture=0.0
+    temperature=0.0
 ).configurable_fields(
     callbacks=ConfigurableField(
         id="callbacks",
@@ -33,10 +35,9 @@ llm = ChatGoogleGenerativeAI(
 prompt = ChatPromptTemplate.from_messages([
     ("system", (
         "You are a helpful and intelligent assistant. "
-        "You are skilled at summarizing and commenting on PDF documents. "
-        "When given a PDF, extract the key points, create a clear and concise summary, and provide insightful comments or critiques. "
-        "You are also capable of conducting internet research when needed, to enrich your responses with accurate, up-to-date, and relevant information. "
-        "For technical or academic documents, ensure accuracy, depth, and critical thinking in your summaries and comments."
+        "Answer general questions and engage in conversations naturally. "
+        "Always use the final_answer tool to provide the final response in the format {{'answer': '...', 'tools_used': [...]}}."
+        "You MUST use the `final_answer` tool to give your final reply. Do NOT reply with plain text. Responses without calling this tool will be ignored."
     )),
     MessagesPlaceholder(variable_name="chat_history"),
     ("human", "{input}"),
@@ -45,8 +46,8 @@ prompt = ChatPromptTemplate.from_messages([
 
 class Agent:
     def __init__(self, max_iter=3):
-        tools = [read_pdf_and_save, serp_api_search]
-        self.tools = {tool.name:tool.coroutine for tool in tools}
+        tools = [read_pdf_and_save, final_answer, serp_api_search]
+        self.tools = {tool.name: tool.coroutine for tool in tools}
         self.max_iter = max_iter
         self.chat_history = ConversationSummaryBufferMemory(llm=llm, k=self.max_iter)
         self.agent = (
@@ -56,7 +57,7 @@ class Agent:
                 'chat_history': lambda x: x['chat_history']
             }
             | prompt
-            | llm.bind_tools(self.tools, tool_choice='any')
+            | llm.bind_tools(tools, tool_choice='any')
         )
 
     #Bu fonksiyon aslında streaming ile gelen tokenları işliyor ve birleştiriyor.Yani tool ve parametrekleri kısaca
@@ -69,14 +70,14 @@ class Agent:
         outputs = []
         async for token in response.astream({
             "input": query,
-            "chat_history": self.chat_history,
+            "chat_history": self.chat_history.aget_messages(),
             "agent_scratchpad": agent_scratchpad
         }):
             #Burda token sonucu olan argumanları alıyoruz.Bunlar fonksiyonun id'side olabilir.Parametreleride.
-            tool_calls = token.additional_kwargs.get('tool_calls')
+            tool_calls = token.tool_calls
             if tool_calls:
                 #Eğer fonksiyon id si ise ekliyoruz.
-                if tool_calls[0][id]:
+                if tool_calls[0]['id']:
                     outputs.append(token)
                 #Aynı fonksiyon ise topluyoruz surekli bu da bize bir tool sonucu oluyor elimizde.İdsi olan ve parametreleri olan bir mesaj.
                 else:
@@ -90,7 +91,7 @@ class Agent:
                 content=x.content,
                 tool_call=x.tool_calls,
                 tool_call_id=x.tool_calls[0]['id']
-            )for x in outputs
+            ) for x in outputs
         ]
 
 
@@ -103,21 +104,23 @@ class Agent:
         while count< self.max_iter:
             tool_calls = await self.stream(query=input, stramer=streamer, agent_scratchpad=agent_scratchpad)
 
+            valid_tool_calls = [tc for tc in tool_calls if tc.tool_calls]
             #Tool sonuçları burda toplanıyor bir liste olarak.
             #Burda * olma sebebi ise gather aynı anda birden fazla await func olması için onları args olarak almalı.
             tool_executes = await asyncio.gather(
-                *[execute_tools(tool_call, self.tools) for tool_call in tool_calls]
+                *[execute_tools(tool_call, self.tools) for tool_call in valid_tool_calls]
             )
 
             #Bu aslında bir dict oluşturuyor her toolid ye karşılık toolmessage
-            id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in zip(tool_calls, tool_executes)}
+            id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in zip(valid_tool_calls, tool_executes)}
             for tool_call in tool_calls:
                 agent_scratchpad.extend([tool_call, id2tool_executed[tool_call.tool_call_id]])
 
             count+=1
             found_final_answer = False
+            #Burda tooların hepsindn final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
 
-            #Burda tooların hepsindne final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
+            print(tool_call.tool_calls[0]["name"], 'Arabaaaaaa')
             for tool_call in tool_calls:
                 if tool_call.tool_calls[0]['name'] == 'final_answer':
                     final_answer_call = tool_call.tool_calls[0]
@@ -128,7 +131,7 @@ class Agent:
             if found_final_answer:
                 break
 
-        #Custom olan kendi historyme eklemeler yapıyorum burda.
+        #Custom olan kendi history'ye eklemeler yapıyorum burda.
         self.chat_history.add_messages([
             HumanMessage(content=input),
             AIMessage(content=final_answer if final_answer else 'No answer found')
@@ -137,3 +140,4 @@ class Agent:
         return final_answer_call if final_answer else {"answer": "No answer found", "tools_used": []}
 
 
+agent_executor = Agent()
