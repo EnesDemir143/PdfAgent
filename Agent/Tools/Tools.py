@@ -1,6 +1,6 @@
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 from langchain.tools import tool
 from pathlib import Path
 import aiohttp
@@ -13,9 +13,10 @@ GOOGLE_API_KEY = SecretStr(os.environ["GOOGLE_API_KEY"])
 SERPAPI_API_KEY = SecretStr(os.environ["SERPAPI_API_KEY"])
 
 @tool
-def read_pdf_and_save(path: Path) -> str:
+async def read_pdf_and_save(path: Path) -> str:
     """
-    PDF dosyasını okur, parçalara böler, vektörleştirir ve Chroma'ya kaydeder.
+    PDF dosyasını işler ve vektör veritabanına kaydeder.
+    Bu işlemden sonra `query_pdf_store` aracı ile PDF'ten bilgi sorgulanabilir.
     """
     try:
         print(f"PDF işleme başladı: {path}")
@@ -30,7 +31,6 @@ def read_pdf_and_save(path: Path) -> str:
             embedding=embedding,
             persist_directory="vectorstore/pdf_store"
         )
-        vectorstore.persist()
         print("PDF başarıyla işlendi ve kaydedildi.")
         return "PDF başarıyla işlendi."
     except Exception as e:
@@ -60,14 +60,17 @@ async def final_answer(answer: str, tools_used: list[str]) -> dict[str, str | li
     return {"answer": answer, "tools_used": tools_used}
 
 @tool
-def query_pdf_store(query: str) -> str:
+async def query_pdf_store(query: str) -> str:
     """
-    Kaydedilmiş PDF vektör veritabanında verilen sorguya (query) göre arama yapar ve
-    en alakalı doküman parçalarını getirir.
-                                        """
+    Önceden `read_pdf_and_save` ile işlenmiş PDF'lerdeki bilgileri sorgular.
+    Sorguyu yanıtlamak için bu araç kullanılmadan `final_answer` verilmemelidir.
+    """
     embedding = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vectorstore = Chroma(persist_directory="vectorstore/pdf_store", embedding_function=embedding)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-    docs = retriever.get_relevant_documents(query)
+    vectorstore = Chroma(
+        persist_directory="vectorstore/pdf_store",
+        embedding_function=embedding
+    )
+    retriever = vectorstore.as_retriever()
+    docs = retriever.invoke(query)  # get_relevant_documents() yerine invoke()
     combined_text = "\n".join([doc.page_content for doc in docs])
     return combined_text

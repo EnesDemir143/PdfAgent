@@ -35,6 +35,7 @@ llm = ChatGoogleGenerativeAI(
 prompt = ChatPromptTemplate.from_messages([
     ("system", (
         "You are a helpful and intelligent assistant. "
+        "If the user uploads or refers to a PDF, you must first call the `read_pdf_and_save` tool, then use `query_pdf_store` to extract information from it before responding. Do not answer the user directly — only use the `final_answer` tool after the relevant tools have been called."
         "Answer general questions and engage in conversations naturally. "
         "Always use the final_answer tool to provide the final response in the format {{'answer': '...', 'tools_used': [...]}}."
         "You MUST use the `final_answer` tool to give your final reply. Do NOT reply with plain text. Responses without calling this tool will be ignored."
@@ -46,7 +47,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 class Agent:
     def __init__(self, max_iter=3):
-        tools = [read_pdf_and_save, final_answer]
+        tools = [read_pdf_and_save, final_answer, read_pdf_and_save, query_pdf_store]
         self.tools = {tool.name: tool.coroutine for tool in tools}
         self.max_iter = max_iter
         self.chat_history = ConversationSummaryBufferMemory(llm=llm, k=self.max_iter)
@@ -107,7 +108,7 @@ class Agent:
             tool_executes = await asyncio.gather(
                 *[execute_tools(tool_call, self.tools) for tool_call in tool_calls]
             )
-
+            print('tool_execute bitti')
             id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in
                                 zip(tool_calls, tool_executes)}
 
@@ -117,7 +118,7 @@ class Agent:
                     agent_scratchpad.extend([tool_call, id2tool_executed[tool_call_id]])
                 else:
                     print(f"Warning: tool_call_id {tool_call_id} not found or execution failed. {tool_call}")
-
+            print('agent_scratchpad eklemesi tamamlandı.')
             count+=1
             #Burda tooların hepsindn final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
 
@@ -126,11 +127,12 @@ class Agent:
             for tool_call in tool_calls:
                 if getattr(tool_call, 'tool_call', None) and len(tool_call.tool_call) > 0:
                     if tool_call.tool_call[0]['name'] == 'final_answer':
+                        print('final_answer')
                         final_answer_call = tool_call.tool_call[0]
                         final_answer = final_answer_call['args']['answer']
                         found_final_answer = True
                         break
-
+                print('final answer check tamamlandı.')
             if found_final_answer:
                 break
 

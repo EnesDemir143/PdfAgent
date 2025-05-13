@@ -1,11 +1,8 @@
-from typing import Sequence
-
 from langchain_core.chat_history import  BaseChatMessageHistory
 from langchain_core.messages import BaseMessage
 from langchain_core.prompts import ChatPromptTemplate, SystemMessagePromptTemplate, HumanMessagePromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import BaseModel, Field
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage
 
 
 class ConversationSummaryBufferMemory(BaseChatMessageHistory):

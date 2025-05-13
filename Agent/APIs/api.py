@@ -11,6 +11,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from Agent.Agent import agent_executor
 from Agent.StreamingHandler import QueueCallbackHandler
 from pydantic import BaseModel
+
+os.makedirs("temp_pdfs", exist_ok=True)
+
 app = FastAPI()
 
 app.add_middleware(
@@ -67,12 +70,18 @@ async def token_generate(content: str, streamer: QueueCallbackHandler):
     # Streaming tamamlandığında task sonucu alınıyor ama tekrar yield etmiyoruz
     await task
 
+from fastapi import UploadFile, File, Form
 @app.post("/invoke")
-async def invoke(content: str):
+async def invoke(content: str = Form(...), pdf_file: UploadFile = File(None)):
     queue: asyncio.Queue = asyncio.Queue()
     streamer = QueueCallbackHandler(queue)
 
-    # Ensure that we keep the connection open and yield data properly
+    if pdf_file is not None:
+        temp_path = f"temp_pdfs/{pdf_file.filename}"
+        with open(temp_path, "wb") as f:
+            f.write(await pdf_file.read())
+        content += f"\n\n[PDF_PATH:{temp_path}]"
+
     return StreamingResponse(
         token_generate(content, streamer),
         media_type="text/event-stream",
