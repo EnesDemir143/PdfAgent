@@ -25,9 +25,9 @@ app.add_middleware(
 )
 
 import json
-async def token_generate(content: InvokeRequest, streamer: QueueCallbackHandler):
+async def token_generate(content: str, streamer: QueueCallbackHandler):
     task = asyncio.create_task(agent_executor.invoke(
-        input=content.content,
+        input=content,
         streamer=streamer,
         verbose=True
     ))
@@ -51,6 +51,11 @@ async def token_generate(content: InvokeRequest, streamer: QueueCallbackHandler)
                         tools_used = tool_args.get("tools_used", [])
                         yield f"<answer>{answer}</answer>"
                         yield f"<tools_used>{json.dumps(tools_used)}</tools_used>"
+
+                        # final_answer geldi, stream durduruluyor:
+                        print("final_answer alındı, streaming durduruluyor.")
+                        break  # veya return ile fonksiyonu sonlandırabilirsiniz
+
                     else:
                         # Diğer tool argümanları JSON string olarak gönderilebilir
                         if tool_args:
@@ -67,7 +72,7 @@ async def token_generate(content: InvokeRequest, streamer: QueueCallbackHandler)
     await task
 
 @app.post("/invoke")
-async def invoke(content: InvokeRequest):
+async def invoke(content: str):
     queue: asyncio.Queue = asyncio.Queue()
     streamer = QueueCallbackHandler(queue)
 
