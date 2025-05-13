@@ -4,25 +4,24 @@ import os
 from langchain_core.messages import AIMessage, ToolMessage, HumanMessage
 from langchain_core.prompts import MessagesPlaceholder, ChatPromptTemplate
 from langchain_core.runnables import ConfigurableField
-from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
+from langchain_openai import ChatOpenAI
 
-from Agent.Memory.MemoryRunnable import get_chat_history
 from Agent.Memory.memory import ConversationSummaryBufferMemory
 from Agent.StreamingHandler import QueueCallbackHandler
-from Agent.Tools.Tools import read_pdf_and_save, final_answer, serp_api_search, query_pdf_store
-from Agent.Tools.tool_helpers import execute_tools
+from Agent.Tools.Tools import read_pdf_and_save, final_answer, serp_api_search, query_pdf_store, think_through_question
 
 #Model tanımlaması
-model = 'gemini-2.0-flash'
+model = 'gpt-4o-mini'
 #API yı alıyoruz .env den.
-GOOGLE_API_KEY = SecretStr(os.environ['GOOGLE_API_KEY'])
+OPENAI_API_KEY = SecretStr(os.environ['OPENAI_API_KEY'])
 
 #LLM tanımlaması
-llm = ChatGoogleGenerativeAI(
-    google_api_key=GOOGLE_API_KEY,
-    model=model,
-    temperature=0.0
+llm = ChatOpenAI(
+    model="gpt-4o-mini",
+    temperature=0.0,
+    streaming=True,
+    api_key=OPENAI_API_KEY
 ).configurable_fields(
     callbacks=ConfigurableField(
         id="callbacks",
@@ -37,6 +36,13 @@ prompt = ChatPromptTemplate.from_messages([
         "You are a helpful and intelligent assistant. "
         "If the user uploads or refers to a PDF, you must first call the `read_pdf_and_save` tool, then use `query_pdf_store` to extract information from it before responding. Do not answer the user directly — only use the `final_answer` tool after the relevant tools have been called."
         "Answer general questions and engage in conversations naturally. "
+        "If you call the `think_through_question` tool, you must then follow its reasoning and call the necessary tools it suggests."
+        "After using all needed tools, you must summarize everything with the `final_answer` tool. Do NOT stop after thinking. "
+        """ Example: 
+        User: "Who is Einstein and what is the capital of France?"
+        → Call think_through_question
+        → Then call serp_api_search twice
+        → Then call final_answer"""
         "Always use the final_answer tool to provide the final response in the format {{'answer': '...', 'tools_used': [...]}}."
         "You MUST use the `final_answer` tool to give your final reply. Do NOT reply with plain text. Responses without calling this tool will be ignored."
     )),
@@ -47,7 +53,7 @@ prompt = ChatPromptTemplate.from_messages([
 
 class Agent:
     def __init__(self, max_iter=3):
-        tools = [read_pdf_and_save, final_answer, read_pdf_and_save, query_pdf_store]
+        tools = [final_answer, read_pdf_and_save, query_pdf_store]
         self.tools = {tool.name: tool.coroutine for tool in tools}
         self.max_iter = max_iter
         self.chat_history = ConversationSummaryBufferMemory(llm=llm, k=self.max_iter)
@@ -59,6 +65,19 @@ class Agent:
             }
             | prompt
             | llm.bind_tools(tools, tool_choice='any')
+        )
+
+    async def execute_tool(self, tool_call: AIMessage) -> ToolMessage:
+        print('tool_call', tool_call)
+        if tool_call.tool_calls:
+            tool_name = tool_call.tool_calls[0]["name"]
+            tool_args = tool_call.tool_calls[0]["args"]
+            tool_out = await self.tools[tool_name](**tool_args)
+        else:
+            return None
+        return ToolMessage(
+            content=f"{tool_out}",
+            tool_call_id=tool_call.tool_calls[0]["id"]
         )
 
     #Bu fonksiyon aslında streaming ile gelen tokenları işliyor ve birleştiriyor.Yani tool ve parametrekleri kısaca
@@ -106,8 +125,10 @@ class Agent:
             tool_calls = await self.stream(query=input, stramer=streamer, agent_scratchpad=agent_scratchpad)
 
             tool_executes = await asyncio.gather(
-                *[execute_tools(tool_call, self.tools) for tool_call in tool_calls]
+                *[self.execute_tool(tool_call) for tool_call in tool_calls]
             )
+            if tool_executes:
+                break
             print('tool_execute bitti')
             id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in
                                 zip(tool_calls, tool_executes)}
@@ -123,16 +144,14 @@ class Agent:
             #Burda tooların hepsindn final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
 
             found_final_answer = False
-
             for tool_call in tool_calls:
-                if getattr(tool_call, 'tool_call', None) and len(tool_call.tool_call) > 0:
-                    if tool_call.tool_call[0]['name'] == 'final_answer':
-                        print('final_answer')
-                        final_answer_call = tool_call.tool_call[0]
-                        final_answer = final_answer_call['args']['answer']
-                        found_final_answer = True
-                        break
-                print('final answer check tamamlandı.')
+                if tool_call.tool_calls[0]["name"] == "final_answer":
+                    final_answer_call = tool_call.tool_calls[0]
+                    final_answer = final_answer_call["args"]["answer"]
+                    found_final_answer = True
+                    break
+                    print('final answer check tamamlandı.')
+
             if found_final_answer:
                 break
 
@@ -143,6 +162,5 @@ class Agent:
         ])
 
         return final_answer_call if final_answer else {"answer": "No answer found", "tools_used": []}
-
 
 agent_executor = Agent()

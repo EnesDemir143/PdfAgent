@@ -74,3 +74,48 @@ async def query_pdf_store(query: str) -> str:
     docs = retriever.invoke(query)  # get_relevant_documents() yerine invoke()
     combined_text = "\n".join([doc.page_content for doc in docs])
     return combined_text
+
+
+@tool
+async def think_through_question(input_text: str) -> str:
+    """
+    Karmaşık veya çoklu alt sorular içeren kullanıcı girdilerini adım adım analiz eder.
+    Her alt soru için uygun araçları önerir ve çözüm sırasını planlar.
+
+    Args:
+        input_text (str): Kullanıcının girdiği doğal dilde soru veya talimat.
+
+    Returns:
+        str: Adım adım düşünme ve işlem planı.
+    """
+    import re
+
+    # Cümleyi parçalara ayır
+    parts = re.split(r'\b(?:and|also|&|,|\.|\?)+\s*', input_text, flags=re.IGNORECASE)
+    parts = [p.strip() for p in parts if p.strip()]
+
+    reasoning_steps = []
+    reasoning_steps.append("🧠 Düşünme Planı (Chain of Thought):")
+    reasoning_steps.append("1. Kullanıcının girdisi analiz ediliyor.")
+
+    if len(parts) > 1:
+        reasoning_steps.append(f"2. Toplam {len(parts)} alt soru tespit edildi:")
+        for i, sub in enumerate(parts, 1):
+            suggestion = " → Uygun araç: "
+            if "pdf" in sub.lower():
+                suggestion += "`read_pdf_and_save` + `query_pdf_store`"
+            elif any(w in sub.lower() for w in ["who", "what", "when", "why", "explain", "define"]):
+                suggestion += "`serp_api_search`"
+            elif "capital" in sub.lower() or "location" in sub.lower():
+                suggestion += "`serp_api_search`"
+            else:
+                suggestion += "`serp_api_search` veya bağlama göre belirlenmeli`"
+            reasoning_steps.append(f"   - Alt soru {i}: \"{sub}\"{suggestion}")
+    else:
+        reasoning_steps.append("2. Tek bir soru tespit edildi.")
+        reasoning_steps.append(f"   - \"{input_text}\" → Uygun araç: bağlama göre")
+
+    reasoning_steps.append("3. Araçlar yukarıdaki sırayla çağrılmalı.")
+    reasoning_steps.append("4. Sonuçlar birleştirilip `final_answer` ile özetlenmeli.")
+
+    return "\n".join(reasoning_steps)
