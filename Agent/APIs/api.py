@@ -11,10 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from Agent.Agent import agent_executor
 from Agent.StreamingHandler import QueueCallbackHandler
 from pydantic import BaseModel
-
-class InvokeRequest(BaseModel):
-    content: str
-
 app = FastAPI()
 
 app.add_middleware(

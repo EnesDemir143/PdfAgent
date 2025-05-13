@@ -104,24 +104,19 @@ class Agent:
         while count< self.max_iter:
             tool_calls = await self.stream(query=input, stramer=streamer, agent_scratchpad=agent_scratchpad)
 
-            valid_tool_calls = [
-                tc for tc in tool_calls
-                if isinstance(tc, AIMessage) and hasattr(tc, 'tool_calls') and tc.tool_calls and len(tc.tool_calls) > 0
-            ]
-
             tool_executes = await asyncio.gather(
-                *[execute_tools(tool_call, self.tools) for tool_call in valid_tool_calls]
+                *[execute_tools(tool_call, self.tools) for tool_call in tool_calls]
             )
 
             id2tool_executed = {tool_call.tool_call_id: tool_execute for tool_call, tool_execute in
-                                zip(valid_tool_calls, tool_executes)}
+                                zip(tool_calls, tool_executes)}
 
             for tool_call in tool_calls:
                 tool_call_id = tool_call.tool_call_id
                 if tool_call_id in id2tool_executed:
                     agent_scratchpad.extend([tool_call, id2tool_executed[tool_call_id]])
                 else:
-                    print(f"Warning: tool_call_id {tool_call_id} not found or execution failed")
+                    print(f"Warning: tool_call_id {tool_call_id} not found or execution failed. {tool_call}")
 
             count+=1
             #Burda tooların hepsindn final varmı bakılır.Varsa eğer onun answer kısmını alıyoruz.
